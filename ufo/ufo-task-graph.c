@@ -916,7 +916,7 @@ create_full_json_from_task_node(UfoTaskNode *task_node) {
 
     JsonObject *json_object= json_object_new ();
 
-    const gchar *plugin_name = ufo_task_node_get_plugin_name (node);
+    const gchar *plugin_name = ufo_task_node_get_plugin_name (task_node);
 
     /* plugin_name can be NULL for task graphs expanded with remote nodes */
     if (plugin_name == NULL)
