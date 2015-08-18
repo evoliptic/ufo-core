@@ -17,16 +17,25 @@
  * License along with this library.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+
+#define _XOPEN_SOURCE 700
+
 #include <string.h>
+
 #ifdef __APPLE__
 #include <OpenCL/cl.h>
 #else
 #include <CL/cl.h>
 #endif
 
+#ifdef HAVE_GMA
+#include <CL/cl_ext.h>
+#endif
+
 #include <ufo/ufo-buffer.h>
 #include <ufo/ufo-resources.h>
 #include "compat.h"
+#include <stdio.h>
 
 /**
  * SECTION:ufo-buffer
@@ -442,7 +451,6 @@ transfer_device_to_host (UfoBufferPrivate *src_priv,
                          cl_command_queue queue)
 {
     cl_int errcode;
-
     errcode = clEnqueueReadBuffer (queue,
                                    src_priv->device_array,
                                    CL_TRUE,
@@ -544,7 +552,103 @@ transfer_image_to_device (UfoBufferPrivate *src_priv,
     UFO_RESOURCES_CHECK_CLERR (clReleaseEvent (event));
 }
 
+#ifdef HAVE_GMA
+UfoBuffer*
+ufo_buffer_new_with_size_in_bytes(gsize size, 
+				  gpointer context)
+{
+    UfoBuffer *buffer;
+    UfoBufferPrivate *priv;
 
+    buffer= UFO_BUFFER(g_object_new(UFO_TYPE_BUFFER,NULL));
+    priv = buffer->priv;
+    priv->context=context;
+    priv->size=size;
+    return buffer;
+}
+
+static void
+alloc_device_array_direct_gma (UfoBufferPrivate *priv)
+{
+    cl_int err;
+    cl_mem mem;
+
+    if (priv->device_array != NULL)
+        UFO_RESOURCES_CHECK_CLERR (clReleaseMemObject (priv->device_array));
+    
+        mem = clCreateBuffer (priv->context,
+                              CL_MEM_BUS_ADDRESSABLE_AMD,
+                              priv->size,
+                              NULL, &err);
+
+	UFO_RESOURCES_CHECK_CLERR (err);
+	priv->device_array = mem;
+}
+
+static cl_bus_address_amd 
+make_buffer_resident_amd (UfoBufferPrivate *priv, 
+			  cl_command_queue queue, 
+			  cl_platform_id SelectedPlatform)
+{
+    clEnqueueMakeBuffersResidentAMD_fn clEnqueueMakeBuffersResidentAMD = NULL;
+
+    cl_bus_address_amd* busaddress;
+    cl_mem buffer;
+    
+    busaddress=g_malloc0(sizeof(cl_bus_address_amd));
+    
+    clEnqueueMakeBuffersResidentAMD = (clEnqueueMakeBuffersResidentAMD_fn) clGetExtensionFunctionAddressForPlatform(SelectedPlatform,"clEnqueueMakeBuffersResidentAMD");
+    if(clEnqueueMakeBuffersResidentAMD == NULL) {
+        g_printerr("impossible to get the clEnqueueMakeBuffersResdidentAMD function");
+	//return NULL;
+    }
+
+    buffer=priv->device_array;
+    
+    UFO_RESOURCES_CHECK_CLERR (clEnqueueMakeBuffersResidentAMD(queue,1,&buffer, CL_TRUE, busaddress,0,0,0));
+    return *busaddress;
+}
+
+void ufo_buffer_init_gma(UfoBuffer *buffer,
+			 int* data,
+			 gpointer command_queue){
+    UFO_RESOURCES_CHECK_CLERR (clEnqueueFillBuffer(*(cl_command_queue*)command_queue, buffer->priv->device_array,data, sizeof(*data),0, buffer->priv->size, 0, NULL, NULL));
+}
+
+void
+ufo_buffer_set_location(UfoBuffer *buffer, 
+			UfoBufferLocation desired_location){
+	buffer->priv->location = desired_location;
+}
+
+void
+ufo_buffer_set_size(UfoBuffer *buffer,
+		    gsize desired_size){
+	buffer->priv->size = desired_size;
+}
+
+gint
+ufo_buffer_copy_for_directgma(UfoBuffer *src,
+			      UfoBuffer *dst,
+			      guint base_offset, 
+			      gpointer cmd_queue){
+    int err;
+    cl_event event;
+    if((err=clEnqueueCopyBuffer(*(cl_command_queue*)cmd_queue, src->priv->device_array, dst->priv->device_array, 0,base_offset*((guint)(src->priv->size)),src->priv->size,0,NULL,&event))!=0) g_printerr("wrong copy %i\n",err);
+    clWaitForEvents(1,&event);
+    return err;
+}
+
+void
+ufo_buffer_read(UfoBuffer *buffer,
+		gpointer read_buffer,
+		gpointer cmd_queue)
+{
+    UFO_RESOURCES_CHECK_CLERR(clEnqueueReadBuffer(*(cl_command_queue*)cmd_queue, buffer->priv->device_array, CL_TRUE, 0, buffer->priv->size, read_buffer, 0, NULL,NULL));
+}
+
+#endif
+  
 /**
  * ufo_buffer_copy:
  * @src: Source #UfoBuffer
@@ -795,18 +899,19 @@ ufo_buffer_get_host_array (UfoBuffer *buffer, gpointer cmd_queue)
  * Returns: (transfer none): A cl_mem object associated with @buffer.
  */
 gpointer
-ufo_buffer_get_device_array (UfoBuffer *buffer, gpointer cmd_queue)
+ufo_buffer_get_device_array (UfoBuffer *buffer,
+			     gpointer cmd_queue)
 {
     UfoBufferPrivate *priv;
-
+    
     g_return_val_if_fail (UFO_IS_BUFFER (buffer), NULL);
     priv = buffer->priv;
 
     update_last_queue (priv, cmd_queue);
 
-    if (priv->device_array == NULL)
+    if (priv->device_array == NULL && priv->location != UFO_BUFFER_LOCATION_DEVICE_DIRECT_GMA)
         alloc_device_array (priv);
-
+    
     if (priv->location == UFO_BUFFER_LOCATION_HOST && priv->host_array)
         transfer_host_to_device (priv, priv, priv->last_queue);
 
@@ -817,6 +922,30 @@ ufo_buffer_get_device_array (UfoBuffer *buffer, gpointer cmd_queue)
 
     return priv->device_array;
 }
+
+#ifdef HAVE_GMA
+gpointer
+ufo_buffer_get_device_array_for_directgma(UfoBuffer *buffer, 
+					  gpointer cmd_queue, 
+					  gpointer platform_id,
+					  gpointer busaddress)
+{
+    UfoBufferPrivate *priv;
+
+    g_return_val_if_fail (UFO_IS_BUFFER (buffer), NULL);
+    priv = buffer->priv;
+
+    update_last_queue (priv, cmd_queue);
+
+    if (priv->device_array == NULL && priv->location == UFO_BUFFER_LOCATION_DEVICE_DIRECT_GMA) {
+        alloc_device_array_direct_gma (priv);
+        *(cl_bus_address_amd*)busaddress=make_buffer_resident_amd(priv,*(cl_command_queue*)cmd_queue, platform_id);
+    }
+
+    return priv->device_array;
+}
+#endif
+
 
 /**
  * ufo_buffer_get_device_array_with_offset:
@@ -844,7 +973,6 @@ ufo_buffer_get_device_array_with_offset (UfoBuffer *buffer,
 
     g_return_val_if_fail (UFO_IS_BUFFER (buffer), NULL);
     priv = buffer->priv;
-
     device_array = ufo_buffer_get_device_array (buffer, cmd_queue);
 
     UFO_RESOURCES_CHECK_CLERR (clGetMemObjectInfo (device_array, CL_MEM_FLAGS,

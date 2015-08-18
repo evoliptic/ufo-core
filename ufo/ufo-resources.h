@@ -142,6 +142,11 @@ const gchar    * ufo_resources_clerr                    (int             error);
 GType            ufo_resources_get_type                 (void);
 GQuark           ufo_resources_error_quark              (void);
 
+#ifdef HAVE_GMA
+void             ufo_get_platform_id_for_directgma      (UfoResources   *resources,
+							 gpointer       platform_id);
+#endif
+
 G_END_DECLS
 
 #endif

@@ -106,7 +106,8 @@ typedef enum {
     UFO_BUFFER_LOCATION_HOST = 0,
     UFO_BUFFER_LOCATION_DEVICE,
     UFO_BUFFER_LOCATION_DEVICE_IMAGE,
-    UFO_BUFFER_LOCATION_INVALID
+    UFO_BUFFER_LOCATION_INVALID,
+    UFO_BUFFER_LOCATION_DEVICE_DIRECT_GMA
 } UfoBufferLocation;
 
 UfoBuffer*  ufo_buffer_new                  (UfoRequisition *requisition,
@@ -130,12 +131,38 @@ void        ufo_buffer_set_host_array       (UfoBuffer      *buffer,
                                              gpointer        array,
                                              gboolean        free_data);
 gfloat*     ufo_buffer_get_host_array       (UfoBuffer      *buffer,
-                                             gpointer        cmd_queue);
+                                            gpointer        cmd_queue);
+#ifdef HAVE_GMA
+gint        ufo_buffer_copy_for_directgma   (UfoBuffer *src,
+                                            UfoBuffer *dst,
+                                            guint base_offset,
+                                            gpointer cmd_queue);
+
+void        ufo_buffer_init_gma             (UfoBuffer *buffer,
+                                            int* data,
+                                            gpointer command_queue);
+
+void        ufo_buffer_read                 (UfoBuffer *buffer,
+                                            gpointer read_buffer,
+                                            gpointer cmd_queue);
+
+UfoBuffer  *ufo_buffer_new_with_size_in_bytes   
+                                            (gsize size, 
+					     gpointer context);
+
+gpointer    ufo_buffer_get_device_array_for_directgma
+                                            (UfoBuffer      *buffer,
+                                             gpointer       cmd_queue,
+                                             gpointer       platform_id,
+                                             gpointer       busaddress);
+#endif
 gpointer    ufo_buffer_get_device_array     (UfoBuffer      *buffer,
                                              gpointer        cmd_queue);
+
 gpointer    ufo_buffer_get_device_array_view(UfoBuffer      *buffer,
                                              gpointer        cmd_queue,
                                              UfoRegion      *region);
+
 gpointer    ufo_buffer_get_device_image     (UfoBuffer      *buffer,
                                              gpointer        cmd_queue);
 gpointer    ufo_buffer_get_device_array_with_offset
@@ -172,6 +199,15 @@ GParamSpec* ufo_buffer_param_spec           (const gchar*   name,
                                              UfoBuffer*     default_value,
                                              GParamFlags    flags);
 GType       ufo_buffer_param_get_type       (void);
+
+#ifdef HAVE_GMA
+void        ufo_buffer_set_location        (UfoBuffer *buffer,
+                                            UfoBufferLocation desired_location);
+
+void        ufo_buffer_set_size            (UfoBuffer *buffer,
+                                            gsize desired_size);
+
+#endif
 
 G_END_DECLS
 

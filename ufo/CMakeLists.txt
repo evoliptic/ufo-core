@@ -79,7 +79,9 @@ set(ufocore_HDRS
 #{{{ libufo
 
 add_definitions(-DUFO_COMPILATION)
-
+if(HAVE_GMA)
+    add_definitions(-DHAVE_GMA)
+endif()
 if(CMAKE_BUILD_TYPE MATCHES "Release")
     add_definitions(-DG_DISABLE_ASSERT)
 endif()

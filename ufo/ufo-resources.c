@@ -33,6 +33,7 @@
 #include <ufo/ufo-remote-node.h>
 #include <ufo/ufo-enums.h>
 #include "compat.h"
+#include <string.h>
 
 /**
  * SECTION:ufo-resources
@@ -252,7 +253,7 @@ lookup_kernel_path (UfoResourcesPrivate *priv,
 }
 
 static gboolean
-platform_has_gpus (cl_platform_id platform)
+platform_has_gpus(cl_platform_id platform)
 {
     cl_uint n_devices = 0;
     cl_int err;
@@ -266,6 +267,82 @@ platform_has_gpus (cl_platform_id platform)
 
     return n_devices > 0;
 }
+
+#ifdef HAVE_GMA
+
+static int
+check_support_extension(cl_device_id deviceID, const char* extensionAsked)
+{
+      size_t extensionSize;
+       clGetDeviceInfo(deviceID, CL_DEVICE_EXTENSIONS,0,NULL, &extensionSize);
+
+      char* extensions_pChar = (char*)malloc(extensionSize+1); //+1 for end null character
+      clGetDeviceInfo(deviceID, CL_DEVICE_EXTENSIONS,extensionSize,extensions_pChar, &extensionSize);
+      extensions_pChar[extensionSize] = '\0';
+
+      if(strstr(extensions_pChar,extensionAsked)!=NULL) return 0;
+      else return 1;
+}
+
+void
+ufo_get_platform_id_for_directgma(UfoResources *resources,
+				  gpointer platform_id)
+{
+
+    cl_platform_id *platforms;
+    cl_uint n_platforms;
+    cl_platform_id candidate = 0;
+    UfoResourcesPrivate *priv;
+
+    priv=resources->priv;
+
+    UFO_RESOURCES_CHECK_CLERR (clGetPlatformIDs (0, NULL, &n_platforms));
+    platforms = g_malloc0 (n_platforms * sizeof (cl_platform_id));
+    UFO_RESOURCES_CHECK_CLERR (clGetPlatformIDs (n_platforms, platforms, NULL));
+
+    g_debug ("Found %i OpenCL platforms %i", n_platforms, priv->platform_index);
+
+
+    guint i;
+    cl_device_id device_id;
+    cl_uint num_of_devices;
+    gchar pBuffer[128];
+   
+
+/* we get the preferably gpu if the user has set it and verify its compatibility with directgma, or the first amd gpu supporting directgma if the user did not set it*/
+    if (priv->platform_index >= 0 && priv->platform_index < (gint) n_platforms) 
+    {
+         clGetPlatformInfo(platforms[priv->platform_index], CL_PLATFORM_VENDOR, 128, pBuffer, NULL);
+         if (strcmp(pBuffer, "Advanced Micro Devices, Inc.") == 0)
+         {
+	      candidate = platforms[priv->platform_index];
+              goto platform_found;
+         }
+    }
+    else
+    {        
+        for (i = 0; i < n_platforms; ++i)
+        {
+            clGetPlatformInfo(platforms[i], CL_PLATFORM_VENDOR, 128, pBuffer, NULL);
+            if (strcmp(pBuffer, "Advanced Micro Devices, Inc.") == 0)
+            {
+	        candidate = platforms[i];
+                goto platform_found;
+            }
+        }
+    }
+    
+    clGetDeviceIDs(candidate, CL_DEVICE_TYPE_GPU, 1, &device_id,&num_of_devices);
+
+    if(check_support_extension(device_id,"cl_amd_bus_addressable_memory")==1)
+      g_printerr("extension required for directgma not found,verify installation");
+    
+platform_found:
+    g_free (platforms);
+    
+    *(cl_platform_id*)platform_id=candidate;
+}
+#endif
 
 static cl_platform_id
 get_preferably_gpu_based_platform (UfoResourcesPrivate *priv)
@@ -295,11 +372,11 @@ get_preferably_gpu_based_platform (UfoResourcesPrivate *priv)
             break;
         }
     }
-
 platform_found:
     g_free (platforms);
     return candidate;
 }
+
 
 static gboolean
 platform_vendor_has_prefix (cl_platform_id platform,
